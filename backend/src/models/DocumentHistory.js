@@ -1,4 +1,3 @@
-// models/DocumentHistory.js
 const mongoose = require('mongoose');
 
 const DocumentHistorySchema = new mongoose.Schema({
@@ -30,7 +29,6 @@ const DocumentHistorySchema = new mongoose.Schema({
     timestamps: true 
 });
 
-// Index for faster queries
 DocumentHistorySchema.index({ document: 1, createdAt: -1 });
 
 module.exports = mongoose.model('DocumentHistory', DocumentHistorySchema);

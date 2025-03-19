@@ -5,10 +5,8 @@ const jwt = require('jsonwebtoken');
 
 const router = express.Router();
 
-// Initialize Magic Admin SDK
 const magic = new Magic(process.env.MAGIC_SECRET_KEY);
 
-// Request Magic Link route
 router.post('/request-magic-link', async (req, res) => {
     try {
         const { email } = req.body;
@@ -19,7 +17,6 @@ router.post('/request-magic-link', async (req, res) => {
             });
         }
 
-        // Generate a Magic Link 
         const didToken = await magic.auth.generateEmailOTP({ 
             email
         });
@@ -36,19 +33,16 @@ router.post('/request-magic-link', async (req, res) => {
     }
 });
 
-// Verify Magic Link token and log in
 router.post('/verify', async (req, res) => {
     try {
         const { email, didToken } = req.body;
 
-        // Validate input
         if (!email || !didToken) {
             return res.status(400).json({ 
                 message: 'Missing required fields' 
             });
         }
 
-        // Validate Magic Link token
         try {
             await magic.token.validate(didToken);
         } catch (validationError) {
@@ -58,11 +52,9 @@ router.post('/verify', async (req, res) => {
             });
         }
 
-        // Find or create user
         let user = await User.findOne({ email });
 
         if (!user) {
-            // Create new user
             try {
                 user = new User({
                     email,
@@ -78,7 +70,6 @@ router.post('/verify', async (req, res) => {
             }
         }
 
-        // Generate JWT token
         const token = jwt.sign(
             { 
                 id: user._id, 
@@ -90,7 +81,6 @@ router.post('/verify', async (req, res) => {
             }
         );
 
-        // Successful response
         res.status(200).json({
             token,
             user: {
@@ -108,8 +98,7 @@ router.post('/verify', async (req, res) => {
 
 });
 
-// Add this temporary code to your authRoutes.js for testing
-// DO NOT USE IN PRODUCTION
+
 router.get('/test-token', async (req, res) => {
     try {
       const testToken = await magic.auth.generateTestToken('your-test-email@example.com');

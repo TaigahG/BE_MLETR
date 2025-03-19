@@ -1,0 +1,9 @@
+{
+  "watch": ["src"],
+  "ext": "js,json",
+  "ignore": ["src/tests"],
+  "exec": "node src/server.js",
+  "env": {
+    "PORT": 3001
+  }
+}

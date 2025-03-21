@@ -8,18 +8,15 @@ class TransferController {
             const { documentId, recipient } = req.body;
             const sender = req.user._id;
 
-            // Validate document
             const document = await Document.findById(documentId);
             if (!document) {
                 return res.status(404).json({ error: 'Document not found' });
             }
 
-            // Check if document is transferable
             if (document.documentType !== 'Transferable') {
                 return res.status(400).json({ error: 'Document is not transferable' });
             }
 
-            // Create transfer request
             const transfer = new Transfer({
                 document: documentId,
                 sender,
@@ -29,7 +26,6 @@ class TransferController {
 
             await transfer.save();
 
-            // Optional: Blockchain transfer initiation
             await BlockchainService.initiateDocumentTransfer(
                 document.blockchainId, 
                 sender, 

@@ -15,38 +15,56 @@ router.post('/verify', async (req, res) => {
         if (!didToken) {
             return res.status(400).json({ 
                 success: false,
-                message: 'Missing DID token in authorization header' 
+                message: 'Missing token in authorization header' 
             });
         }
         
-        // Validate the didToken
+        let userMetadata;
+        
+        // Try to validate the token with Magic
         try {
-            await magic.token.validate(didToken);
+            // First, try to decode base64 if it's encoded
+            try {
+                const buff = Buffer.from(didToken, 'base64');
+                const decodedToken = buff.toString('utf-8');
+                
+                // Validate with Magic
+                await magic.token.validate(didToken);
+                
+                // Get user metadata
+                userMetadata = await magic.users.getMetadataByToken(didToken);
+            } catch (decodeError) {
+                // If not base64, try direct validation
+                if (didToken.startsWith('did:')) {
+                    await magic.token.validate(didToken);
+                    userMetadata = await magic.users.getMetadataByToken(didToken);
+                } else {
+                    throw new Error('Invalid token format');
+                }
+            }
         } catch (validationError) {
             console.error('Magic Link Token Validation Error:', validationError);
             return res.status(401).json({ 
                 success: false,
-                message: 'Invalid Magic Link token' 
+                message: 'Invalid authentication token' 
             });
         }
         
-        const metadata = await magic.users.getMetadataByToken(didToken);
-        
-        if (!metadata.email) {
+        if (!userMetadata || !userMetadata.email) {
             return res.status(400).json({
                 success: false,
-                message: 'Email information missing from Magic token'
+                message: 'Email information missing from token'
             });
         }
 
-        let user = await User.findOne({ email: metadata.email });
+        let user = await User.findOne({ email: userMetadata.email });
 
         if (!user) {
             try {
                 user = new User({
-                    email: metadata.email,
-                    username: metadata.email.split('@')[0],
-                    walletAddress: metadata.publicAddress || null
+                    email: userMetadata.email,
+                    username: userMetadata.email.split('@')[0],
+                    walletAddress: userMetadata.publicAddress || null
                 });
 
                 await user.save();
@@ -61,6 +79,7 @@ router.post('/verify', async (req, res) => {
             }
         }
 
+        // Generate a JWT for API authorization
         const token = jwt.sign(
             { 
                 id: user._id, 

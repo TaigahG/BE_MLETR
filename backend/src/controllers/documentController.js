@@ -11,7 +11,6 @@ const storage = multer.diskStorage({
     destination: function (req, file, cb) {
         const uploadDir = path.join(__dirname, '../uploads');
         
-        // Ensure directory exists
         fs.mkdir(uploadDir, { recursive: true })
             .then(() => cb(null, uploadDir))
             .catch(err => cb(err));
@@ -37,18 +36,16 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({ 
     storage: storage,
     limits: {
-        fileSize: 10 * 1024 * 1024 // 10MB
+        fileSize: 10 * 1024 * 1024 
     },
     fileFilter: fileFilter
 });
 
 class DocumentController {
-    // Upload file middleware
     uploadFile() {
         return upload.single('file');
     }
     
-    // Handle file upload
     async handleFileUpload(req, res) {
         try {
             if (!req.file) {
@@ -144,7 +141,7 @@ class DocumentController {
             const blockchainDocumentData = {
                 category: type === 'Transferable' ? 0 : 1,
                 documentHash,
-                expiryDate: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60 // 30 days
+                expiryDate: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60 
             };
 
             const document = new Document({
@@ -232,7 +229,6 @@ class DocumentController {
         }
     }
 
-    // Transfer Document with queue
     async transferDocument(req, res) {
         try {
             const { documentId } = req.params;
@@ -255,7 +251,6 @@ class DocumentController {
                 });
             }
 
-            // Check if document is transferable
             if (document.documentType !== 'Transferable') {
                 return res.status(400).json({ 
                     error: 'Document is not transferable',
@@ -263,7 +258,6 @@ class DocumentController {
                 });
             }
 
-            // Check if user is document owner or in endorsement chain
             if (document.creator.toString() !== userId.toString() && 
                 !document.endorsementChain.includes(userId.toString())) {
                 return res.status(403).json({ 
@@ -272,14 +266,12 @@ class DocumentController {
                 });
             }
 
-            // Add transfer job to queue
             const job = await queueService.addDocumentTransfer(
                 documentId,
                 newHolder,
                 userId
             );
             
-            // Update status to pending transfer
             document.status = 'PendingTransfer';
             await document.save();
 
@@ -371,7 +363,6 @@ class DocumentController {
     
     async downloadAllDocuments(req, res) {
         try {
-            // Get user's documents
             const documents = await Document.find({
                 $or: [
                     { creator: req.user._id },
@@ -385,15 +376,12 @@ class DocumentController {
                 });
             }
             
-            // Set headers for ZIP download
             res.setHeader('Content-Type', 'application/zip');
             res.setHeader('Content-Disposition', 'attachment; filename="documents.zip"');
             
-            // Create ZIP archive
             const archive = archiver('zip', { zlib: { level: 9 } });
             archive.pipe(res);
             
-            // Add each document to ZIP
             for (const document of documents) {
                 const ttContent = JSON.stringify({
                     documentType: document.documentType,
@@ -410,7 +398,6 @@ class DocumentController {
                 });
             }
             
-            // Finalize ZIP and send
             await archive.finalize();
         } catch (error) {
             console.error('Download all documents error:', error);
@@ -420,7 +407,6 @@ class DocumentController {
         }
     }
     
-    // Get document details
     async getDocumentDetails(req, res) {
         try {
             const { documentId } = req.params;
@@ -446,7 +432,6 @@ class DocumentController {
         }
     }
     
-    // Get user documents
     async getUserDocuments(req, res) {
         try {
             const userId = req.user._id;
@@ -473,7 +458,6 @@ class DocumentController {
         }
     }
 
-    // Get document history
     async getDocumentHistory(req, res) {
         try {
             const { documentId } = req.params;
@@ -486,7 +470,6 @@ class DocumentController {
                 });
             }
             
-            // Check if user has permission to view this document
             const userId = req.user._id;
             const isCreator = document.creator.toString() === userId.toString();
             const isInChain = document.endorsementChain.includes(userId);

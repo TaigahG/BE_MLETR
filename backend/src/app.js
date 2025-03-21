@@ -16,7 +16,6 @@ class App {
         // CORS Configuration
         const corsOptions = {
             origin: function (origin, callback) {
-                // List of allowed origins
                 const allowedOrigins = [
                     'http://localhost:3000',   // Backend server
                     'http://localhost:5173',   // Vite default port
@@ -25,7 +24,6 @@ class App {
                     'http://127.0.0.1:5174'    
                 ];
 
-                // Allow requests with no origin (like mobile apps or postman)
                 if (!origin || allowedOrigins.indexOf(origin) !== -1) {
                     callback(null, true);
                 } else {
@@ -44,22 +42,18 @@ class App {
             optionsSuccessStatus: 200
         };
 
-        // Apply CORS middleware
         this.app.use(cors(corsOptions));
 
         // Security middleware
         this.app.use(helmet({
             // Disable X-Powered-By header
             hidePoweredBy: true,
-            // Prevent clickjacking
             frameguard: { action: 'deny' }
         }));
 
-        // Body parsing middlewares
         this.app.use(express.json({ limit: '10mb' }));
         this.app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-        // Logging middleware
         this.app.use((req, res, next) => {
             console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
             next();
@@ -67,7 +61,6 @@ class App {
     }
 
     initializeRoutes() {
-        // Your existing route initialization
         const apiPrefix = '/api/v1';
         
         // Import routes
@@ -79,7 +72,6 @@ class App {
         this.app.use(`${apiPrefix}/users`, userRoutes);
         this.app.use(`${apiPrefix}/documents`, documentRoutes);
 
-        // Health check route
         this.app.get('/health', (req, res) => {
             res.status(200).json({ 
                 status: 'OK', 
@@ -89,13 +81,11 @@ class App {
     }
 
     initializeErrorHandling() {
-        // Global error handler
         this.app.use(errorHandler);
     }
 
     async initialize() {
         try {
-            // Connect to database
             await connectDatabase();
             console.log('Database connected successfully');
             return this.app;

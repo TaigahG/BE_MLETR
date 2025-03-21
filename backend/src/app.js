@@ -24,8 +24,8 @@ class App {
 
     async initialize() {
         try {
-            // Connect to database
             await connectDatabase();
+        
             console.log('✅ Database connected successfully');
             
             // Start blockchain monitoring if enabled

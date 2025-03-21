@@ -16,6 +16,7 @@ router.post('/request-magic-link', async (req, res) => {
                 message: 'Email is required' 
             });
         }
+        console.log(`Would send magic link to: ${email}`);
 
         const didToken = await magic.auth.generateEmailOTP({ 
             email
@@ -35,7 +36,10 @@ router.post('/request-magic-link', async (req, res) => {
 
 router.post('/verify', async (req, res) => {
     try {
-        const { email, didToken } = req.body;
+        const didToken = req.headers.authorization ? req.headers.authorization.substr(7) : null;
+        await magic.token.validate(didToken);
+        const metadata = await magic.users.getMetadataByToken(didToken);
+        const email = metadata.email;
 
         if (!email || !didToken) {
             return res.status(400).json({ 
@@ -99,10 +103,37 @@ router.post('/verify', async (req, res) => {
 });
 
 
-router.get('/test-token', async (req, res) => {
+// Add this to authRoutes.js - REMOVE BEFORE PRODUCTION
+router.get('/test-login/:email', async (req, res) => {
     try {
-      const testToken = await magic.auth.generateTestToken('your-test-email@example.com');
-      res.json({ didToken: testToken });
+      const email = req.params.email;
+      
+      // Create or find user
+      let user = await User.findOne({ email });
+      if (!user) {
+        user = new User({
+          email,
+          username: email.split('@')[0]
+        });
+        await user.save();
+      }
+      
+      // Generate JWT
+      const token = jwt.sign(
+        { id: user._id, email: user.email },
+        process.env.JWT_SECRET,
+        { expiresIn: '1d' }
+      );
+      
+      res.json({
+        message: "Test login successful (bypasses Magic Link)",
+        token,
+        user: {
+          id: user._id,
+          email: user.email,
+          username: user.username
+        }
+      });
     } catch (error) {
       res.status(500).json({ error: error.message });
     }

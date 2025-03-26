@@ -7,7 +7,6 @@ class UserController {
         try {
             const { username, email, password, walletAddress } = req.body;
 
-            // Check if user already exists
             const existingUser = await User.findOne({ 
                 $or: [{ email }, { username }] 
             });
@@ -18,7 +17,6 @@ class UserController {
                 });
             }
 
-            // Create new user
             const user = new User({
                 username,
                 email,
@@ -28,7 +26,6 @@ class UserController {
 
             await user.save();
 
-            // Generate JWT token
             const token = jwt.sign(
                 { id: user._id }, 
                 process.env.JWT_SECRET, 
@@ -53,7 +50,6 @@ class UserController {
         try {
             const { email, password } = req.body;
 
-            // Find user
             const user = await User.findOne({ email });
             if (!user) {
                 return res.status(401).json({ 
@@ -61,7 +57,6 @@ class UserController {
                 });
             }
 
-            // Check password
             const isMatch = await user.comparePassword(password);
             if (!isMatch) {
                 return res.status(401).json({ 
@@ -69,7 +64,6 @@ class UserController {
                 });
             }
 
-            // Generate JWT token
             const token = jwt.sign(
                 { id: user._id }, 
                 process.env.JWT_SECRET, 

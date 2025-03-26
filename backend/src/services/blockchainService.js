@@ -1,4 +1,3 @@
-// services/blockchainService.js
 const { Web3 } = require('web3');
 const DocumentRegistryABI = require('../contracts/DocumentRegistry.json');
 const DocumentManagementABI = require('../contracts/DocumentManagement.json');
@@ -7,6 +6,24 @@ const { events } = require('../models/User');
 class BlockchainService {
     constructor() {
         this.web3 = new Web3(process.env.BLOCKCHAIN_PROVIDER);
+
+        // if (process.env.BLOCKCHAIN_PRIVATE_KEY) {
+        //     try {
+        //         this.account = this.web3.eth.accounts.privateKeyToAccount(
+        //             process.env.BLOCKCHAIN_PRIVATE_KEY.startsWith('0x') 
+        //                 ? process.env.BLOCKCHAIN_PRIVATE_KEY 
+        //                 : '0x' + process.env.BLOCKCHAIN_PRIVATE_KEY
+        //         );
+                
+        //         this.web3.eth.accounts.wallet.add(this.account);
+        //         console.log('Blockchain account initialized:', this.account.address);
+        //     } catch (error) {
+        //         console.error('Failed to initialize blockchain account:', error);
+        //     }
+        // } else {
+        //     console.warn('No BLOCKCHAIN_PRIVATE_KEY provided');
+        // }
+
 
         this.gasPrice = null;
         this.updateGasPrice();
@@ -20,6 +37,10 @@ class BlockchainService {
             DocumentManagementABI.abi, 
             process.env.DOCUMENT_MANAGEMENT_CONTRACT_ADDRESS
         );
+
+        // this.checkRoles().catch(error => {
+        //     console.error('Error during role check:', error);
+        // });
     }
 
     async updateGasPrice() {
@@ -47,27 +68,59 @@ class BlockchainService {
 
         return accounts[0];
     }
+
+    // async checkRoles() {
+    //     try {
+    //         if (!this.account) {
+    //             console.warn('No account to check roles for');
+    //             return;
+    //         }
+            
+    //         const address = this.account.address;
+            
+    //         const DOCUMENT_CREATOR_ROLE = await this.documentManagementContract.methods.DOCUMENT_CREATOR_ROLE().call();
+            
+    //         const hasCreatorRole = await this.documentManagementContract.methods.hasRole(
+    //             DOCUMENT_CREATOR_ROLE, 
+    //             address
+    //         ).call();
+            
+    //         if (hasCreatorRole) {
+    //             console.log(`Account ${address} has DOCUMENT_CREATOR_ROLE`);
+    //         } else {
+    //             console.warn(`Account ${address} is missing DOCUMENT_CREATOR_ROLE`);
+    //             console.warn('Document creation on blockchain will fail due to missing role');
+    //         }
+    //     } catch (error) {
+    //         console.error('Error checking roles:', error);
+    //     }
+    // }
         
 
     async createDocument(documentData) {
         try{
 
+            console.log('Creating document on blockchain:', documentData);
             const sender = await this.getSenderAccounts();
+            const expiryDate = BigInt(documentData.expiryDate);
 
             const gasEstimate = await this.documentManagementContract.methods.createDocument(
                 documentData.category,
                 this.web3.utils.sha3(documentData.documentHash),
-                documentData.expiryDate
+                expiryDate
             ).estimateGas({ from: sender });
+
+            const gasToUse = BigInt(Math.floor(Number(gasEstimate) * 1.2));
+            const gasPriceBigInt = BigInt(this.gasPrice);
 
             const result = await this.documentManagementContract.methods.createDocument(
                 documentData.category,
                 this.web3.utils.sha3(documentData.documentHash),
-                documentData.expiryDate
+                expiryDate
             ).send({
                 from: sender,
-                gas: Math.floor(gasEstimate * 1.2),
-                gasPrice: this.gasPrice
+                gas: gasToUse.toString(),
+                gasPrice: gasPriceBigInt.toString()
             })
 
             const documentCreatedEvent = result.events.DocumentCreated;
@@ -77,7 +130,7 @@ class BlockchainService {
             return {
                 documentId: documentCreatedEvent.returnValues.documentId,
                 transactionHash: result.transactionHash,
-                blockNumber: result.blockNumber
+                blockNumber: Number(result.blockNumber)
             };
         }
         catch(error){
@@ -108,7 +161,7 @@ class BlockchainService {
 
             return{
                 transactionHash: result.transactionHash,
-                blockNumber: result.blockNumber,
+                blockNumber: Number(result.blockNumber),
                 events: result.events
             }
         }catch(error){
@@ -135,7 +188,7 @@ class BlockchainService {
 
             return{
                 transactionHash: result.transactionHash,
-                blockNumber: result.blockNumber,
+                blockNumber: Number(result.blockNumber),
                 events: result.events
             }
 

@@ -30,13 +30,13 @@ documentCreationQueue.process(async (job) => {
     const { documentData, documentId } = job.data;
     
     try {
-       
         const blockchainResponse = await BlockchainService.createDocument(documentData);
+        console.log('Blockchain response:', blockchainResponse);
         
         await Document.findByIdAndUpdate(documentId, {
             blockchainId: blockchainResponse.documentId,       
             transactionHash: blockchainResponse.transactionHash, 
-            blockNumber: blockchainResponse.blockNumber,       
+            blockNumber: Number(blockchainResponse.blockNumber),       
             status: 'Active'                              
         });
         
@@ -71,7 +71,7 @@ documentVerificationQueue.process(async (job) => {
         await Document.findByIdAndUpdate(documentId, {
             status: 'Verified',
             verificationTransactionHash: verificationResult.transactionHash,
-            verificationBlockNumber: verificationResult.blockNumber,
+            verificationBlockNumber: Number(verificationResult.blockNumber),
             verifiedBy: userId,
             verifiedAt: new Date()
         });
@@ -108,7 +108,7 @@ documentTransferQueue.process(async (job) => {
             {
                 status: 'Transferred',
                 transferTransactionHash: transferResult.transactionHash,
-                transferBlockNumber: transferResult.blockNumber,
+                transferBlockNumber: Number(transferResult.blockNumber),
                 $push: { endorsementChain: newHolder } 
             },
             { new: true }

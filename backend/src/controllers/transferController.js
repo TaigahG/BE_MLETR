@@ -55,22 +55,18 @@ class TransferController {
                 return res.status(404).json({ error: 'Transfer not found' });
             }
 
-            // Validate recipient
             if (transfer.recipient.toString() !== recipient.toString()) {
                 return res.status(403).json({ error: 'Unauthorized transfer approval' });
             }
 
-            // Update document ownership on blockchain
             await BlockchainService.transferDocument(
                 transfer.document.blockchainId, 
                 recipient
             );
 
-            // Update transfer status
             transfer.status = 'Completed';
             await transfer.save();
 
-            // Update document endorsement chain
             const document = transfer.document;
             document.endorsementChain.push(recipient);
             document.status = 'Transferred';
@@ -97,12 +93,10 @@ class TransferController {
                 return res.status(404).json({ error: 'Transfer not found' });
             }
 
-            // Validate recipient
             if (transfer.recipient.toString() !== recipient.toString()) {
                 return res.status(403).json({ error: 'Unauthorized transfer rejection' });
             }
 
-            // Update transfer status
             transfer.status = 'Rejected';
             await transfer.save();
 

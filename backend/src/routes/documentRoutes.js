@@ -1,4 +1,3 @@
-// documentRoutes.js
 const express = require('express');
 const DocumentController = require('../controllers/documentController');
 const authMiddleware = require('../middleware/authMiddleware');

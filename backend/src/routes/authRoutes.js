@@ -21,20 +21,15 @@ router.post('/verify', async (req, res) => {
         
         let userMetadata;
         
-        // Try to validate the token with Magic
         try {
-            // First, try to decode base64 if it's encoded
             try {
                 const buff = Buffer.from(didToken, 'base64');
                 const decodedToken = buff.toString('utf-8');
                 
-                // Validate with Magic
                 await magic.token.validate(didToken);
                 
-                // Get user metadata
                 userMetadata = await magic.users.getMetadataByToken(didToken);
             } catch (decodeError) {
-                // If not base64, try direct validation
                 if (didToken.startsWith('did:')) {
                     await magic.token.validate(didToken);
                     userMetadata = await magic.users.getMetadataByToken(didToken);
@@ -79,7 +74,6 @@ router.post('/verify', async (req, res) => {
             }
         }
 
-        // Generate a JWT for API authorization
         const token = jwt.sign(
             { 
                 id: user._id, 
@@ -91,11 +85,9 @@ router.post('/verify', async (req, res) => {
             }
         );
 
-        // Update last login time
         user.lastLogin = new Date();
         await user.save();
 
-        // Return success response with user data and token
         res.status(200).json({
             success: true,
             message: 'Authentication successful',
@@ -142,14 +134,12 @@ router.get('/me', authMiddleware.authenticate, async (req, res) => {
 
 router.post('/logout', authMiddleware.authenticate, async (req, res) => {
     try {
-        // If it's a Magic Link token, log out from Magic too
         if (req.token.startsWith('did:')) {
             try {
                 await magic.users.logoutByToken(req.token);
             } catch (magicError) {
                 console.error('Magic logout error:', magicError);
-                // Continue even if Magic logout fails
-            }
+                }
         }
         
         res.json({

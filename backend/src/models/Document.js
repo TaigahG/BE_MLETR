@@ -1,19 +1,18 @@
-// Enhanced Document.js model
 const mongoose = require('mongoose');
 
 const DocumentSchema = new mongoose.Schema({
     blockchainId: {
         type: String,
-        required: true,
-        unique: true
+        required: false,
+        unique: false
     },
     transactionHash: {
         type: String,
-        required: true
+        required: false,
     },
     blockNumber: {
         type: Number,
-        required: true
+        required: false,
     },
     documentType: {
         type: String,
@@ -93,5 +92,7 @@ DocumentSchema.methods.verifyHash = function(metadata) {
         .digest('hex');
     return calculatedHash === this.documentHash;
 };
+
+
 
 module.exports = mongoose.model('Document', DocumentSchema);

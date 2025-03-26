@@ -45,11 +45,11 @@ class App {
         this.app.use(cors(corsOptions));
 
         // Security middleware
-        this.app.use(helmet({
-            // Disable X-Powered-By header
-            hidePoweredBy: true,
-            frameguard: { action: 'deny' }
-        }));
+        // this.app.use(helmet({
+        //     // Disable X-Powered-By header
+        //     hidePoweredBy: true,
+        //     frameguard: { action: 'deny' }
+        // }));
 
         this.app.use(express.json({ limit: '10mb' }));
         this.app.use(express.urlencoded({ extended: true, limit: '10mb' }));

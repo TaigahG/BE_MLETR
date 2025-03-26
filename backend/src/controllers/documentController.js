@@ -131,18 +131,13 @@ class DocumentController {
                     error: 'Document type and metadata are required' 
                 });
             }
-            
+
+                        
             const creator = req.user._id;
 
             const documentHash = crypto.createHash('sha256')
                 .update(JSON.stringify(metadata))
                 .digest('hex');
-
-            const blockchainDocumentData = {
-                category: type === 'Transferable' ? 0 : 1,
-                documentHash,
-                expiryDate: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60 
-            };
 
             const document = new Document({
                 documentType: type,
@@ -150,7 +145,11 @@ class DocumentController {
                 metadata,
                 fileName: fileName || 'Untitled Document',
                 documentHash,
-                status: 'Draft'
+                status: 'Draft',
+                // Blockchain fields will be updated after blockchain transaction
+                // blockchainId: null,
+                // transactionHash: null,
+                // blockNumber: null
             });
 
             await document.save();
@@ -161,6 +160,12 @@ class DocumentController {
                 null, 
                 null  
             );
+
+            const blockchainDocumentData = {
+                category: type === 'Transferable' ? 0 : 1,
+                documentHash,
+                expiryDate: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60 
+            };
 
             const job = await queueService.addDocumentCreation(
                 blockchainDocumentData, 

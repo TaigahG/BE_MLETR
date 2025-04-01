@@ -65,4 +65,10 @@ router.post(
     DocumentController.transferDocument
 );
 
+router.post(
+    '/verify-tradetrust',
+    authMiddleware.authenticate,
+    DocumentController.verifyTradeTrustDocument
+);
+
 module.exports = router;

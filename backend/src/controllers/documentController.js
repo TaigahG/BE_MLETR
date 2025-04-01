@@ -1,6 +1,7 @@
 const Document = require('../models/Document');
 const queueService = require('../services/queueService');
 const documentHistoryService = require('../services/documentHistoryService');
+const BlockchainService = require('../services/blockchainService')
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs').promises;
@@ -191,6 +192,7 @@ class DocumentController {
     async verifyDocument(req, res) {
         try {
             const { documentId } = req.params;
+            const { documentHash } = req.body;
             const userId = req.user._id;
             
             const document = await Document.findById(documentId);
@@ -202,13 +204,23 @@ class DocumentController {
                 });
             }
             
-            if (document.status === 'Verified') {
+            // If a document hash is provided, verify it matches our stored hash
+            if (documentHash && documentHash !== document.documentHash) {
                 return res.status(400).json({
-                    error: 'Document is already verified',
-                    code: 'ALREADY_VERIFIED'
+                    error: 'Document hash does not match',
+                    code: 'HASH_MISMATCH'
                 });
             }
-
+            
+            // If hash matches, continue with blockchain verification
+            if (document.status === 'Verified') {
+                return res.status(200).json({
+                    verified: true,
+                    message: 'Document is already verified',
+                    document
+                });
+            }
+    
             const job = await queueService.addDocumentVerification(
                 documentId,
                 userId
@@ -216,13 +228,13 @@ class DocumentController {
             
             document.status = 'PendingVerification';
             await document.save();
-
+    
             res.json({
                 message: 'Document verification initiated',
                 document,
                 job: {
                     id: job.id,
-                    statusCheckEndpoint: `/api/documents/job-status/verification/${job.id}`
+                    statusCheckEndpoint: `/api/v1/documents/job-status/verification/${job.id}`
                 }
             });
         } catch (error) {
@@ -330,6 +342,8 @@ class DocumentController {
             const { documentId } = req.params;
             
             const document = await Document.findById(documentId);
+
+            console.log('Document:', document);
             
             if (!document) {
                 return res.status(404).json({ 
@@ -343,8 +357,9 @@ class DocumentController {
                     error: 'You do not have permission to download this document' 
                 });
             }
+
             
-            const ttContent = JSON.stringify({
+            const documentData = {
                 documentType: document.documentType,
                 documentHash: document.documentHash,
                 metadata: document.metadata,
@@ -352,12 +367,17 @@ class DocumentController {
                 creator: req.user._id,
                 blockchainId: document.blockchainId,
                 transactionHash: document.transactionHash
-            }, null, 2);
+            };
+
+            console.log('Document data:', documentData);
             
-            res.setHeader('Content-Type', 'application/octet-stream');
+            res.setHeader('Content-Type', 'application/json');
             res.setHeader('Content-Disposition', `attachment; filename="${document.fileName || 'document'}.tt"`);
+
+            console.log('Sending document data:', documentData);
             
-            res.send(Buffer.from(ttContent));
+            res.send(JSON.stringify(documentData, null, 2));
+            console.log('Document sent successfully');
         } catch (error) {
             console.error('Document download error:', error);
             res.status(500).json({ 
@@ -495,6 +515,66 @@ class DocumentController {
             console.error('Get document history error:', error);
             res.status(500).json({ 
                 error: error.message || 'Failed to get document history' 
+            });
+        }
+    }
+
+    async verifyTradeTrustDocument(req, res) {
+        console.log('TradeTrust verification request received:', req.body);
+
+        try {
+            const { documentHash } = req.body;
+            
+            if (!documentHash) {
+                return res.status(400).json({
+                    error: 'Document hash is required',
+                    code: 'MISSING_HASH'
+                });
+            }
+
+            console.log('Verifying document with hash:', documentHash);
+
+            
+            const document = await Document.findOne({ documentHash });
+            console.log('Document found in database:', !!document);
+
+            
+            console.log('Checking document on blockchain...');
+            let isOnBlockchain = false;
+            try {
+                isOnBlockchain = await BlockchainService.verifyDocumentOnBlockchain(documentHash);
+                console.log('Document verified on blockchain:', isOnBlockchain);
+            } catch (blockchainError) {
+                console.error('Blockchain verification error:', blockchainError);
+            }
+            
+            
+            let response = {
+                verified: !!isOnBlockchain,
+                onBlockchain: !!isOnBlockchain,
+                inDatabase: !!document
+            };
+            
+            if (document) {
+                response.document = {
+                    id: document._id,
+                    status: document.status,
+                    documentType: document.documentType,
+                    creator: document.creator,
+                    transactionHash: document.transactionHash,
+                    blockchainId: document.blockchainId,
+                    createdAt: document.createdAt
+                };
+            }
+
+            console.log('Verification response:', response);
+            return res.json(response);
+        } catch (error) {
+            console.error('TradeTrust verification error:', error);
+            res.status(500).json({ 
+                error: error.message || 'Verification failed',
+                stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+                code: 'SERVER_ERROR'
             });
         }
     }

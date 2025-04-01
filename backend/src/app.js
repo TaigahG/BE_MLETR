@@ -38,6 +38,11 @@ class App {
                 'Access-Control-Allow-Origin',
                 'Access-Control-Allow-Headers'
             ],
+            exposedHeaders: [
+                'Content-Disposition',
+                'Content-Length',
+                'Content-Type'
+            ],  
             credentials: true,
             optionsSuccessStatus: 200
         };

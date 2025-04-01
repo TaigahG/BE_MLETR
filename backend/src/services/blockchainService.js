@@ -7,22 +7,27 @@ class BlockchainService {
     constructor() {
         this.web3 = new Web3(process.env.BLOCKCHAIN_PROVIDER);
 
-        // if (process.env.BLOCKCHAIN_PRIVATE_KEY) {
-        //     try {
-        //         this.account = this.web3.eth.accounts.privateKeyToAccount(
-        //             process.env.BLOCKCHAIN_PRIVATE_KEY.startsWith('0x') 
-        //                 ? process.env.BLOCKCHAIN_PRIVATE_KEY 
-        //                 : '0x' + process.env.BLOCKCHAIN_PRIVATE_KEY
-        //         );
+        if (process.env.BLOCKCHAIN_PRIVATE_KEY) {
+            try {
+                // Make sure private key has 0x prefix
+                const privateKey = process.env.BLOCKCHAIN_PRIVATE_KEY.startsWith('0x') 
+                    ? process.env.BLOCKCHAIN_PRIVATE_KEY 
+                    : '0x' + process.env.BLOCKCHAIN_PRIVATE_KEY;
                 
-        //         this.web3.eth.accounts.wallet.add(this.account);
-        //         console.log('Blockchain account initialized:', this.account.address);
-        //     } catch (error) {
-        //         console.error('Failed to initialize blockchain account:', error);
-        //     }
-        // } else {
-        //     console.warn('No BLOCKCHAIN_PRIVATE_KEY provided');
-        // }
+                this.account = this.web3.eth.accounts.privateKeyToAccount(privateKey);
+                
+                // Add account to wallet
+                this.web3.eth.accounts.wallet.add(this.account);
+                
+                console.log('Blockchain account initialized:', this.account.address);
+            } catch (error) {
+                console.error('Failed to initialize blockchain account:', error);
+                throw new Error('Invalid blockchain private key configuration');
+            }
+        } else {
+            console.error('No BLOCKCHAIN_PRIVATE_KEY provided');
+            throw new Error('Missing blockchain private key configuration');
+        }
 
 
         this.gasPrice = null;
@@ -55,19 +60,21 @@ class BlockchainService {
     }
 
     async getSenderAccounts() {
-
-        if(this.account){
+        // If we've set up an account from private key, use it
+        if (this.account) {
             return this.account.address;
         }
 
+        // Otherwise, try to get accounts from connected provider
         const accounts = await this.web3.eth.getAccounts();
 
-        if(!accounts || accounts.length === 0) {
-            throw new Error('No accounts found');
+        if (!accounts || accounts.length === 0) {
+            throw new Error('No accounts found in the connected blockchain provider');
         }
 
         return accounts[0];
     }
+
 
     // async checkRoles() {
     //     try {
@@ -101,6 +108,11 @@ class BlockchainService {
         try{
 
             console.log('Creating document on blockchain:', documentData);
+
+            if (!this.account) {
+                throw new Error('No blockchain account configured');
+            }
+
             const sender = await this.getSenderAccounts();
             const expiryDate = BigInt(documentData.expiryDate);
 
@@ -196,6 +208,93 @@ class BlockchainService {
             
             console.error('Blockchain document verification failed:', error);
             throw new Error(`Blockchain error: ${error.message}`);
+        }
+    }
+
+
+    async verifyDocumentOnBlockchain(documentHash) {
+        try {
+
+            if (!this.web3 || !this.documentManagementContract) {
+                console.error('Blockchain service not properly initialized');
+                return false;
+            }
+
+            const formattedHash = documentHash.startsWith('0x') 
+                ? documentHash 
+                : '0x' + documentHash;
+
+            console.log('Formatted hash for blockchain query:', formattedHash);
+
+            try {
+                // Note: You might need to adjust this based on your contract structure
+                // This is just a hypothetical example
+                const documentExists = await this.documentManagementContract.methods
+                    .documentExists(formattedHash)
+                    .call();
+                    
+                if (documentExists) {
+                    console.log('Document found through direct contract call');
+                    return true;
+                }
+            } catch (directCallError) {
+                console.error('Error in direct contract call:', directCallError);
+                // Continue to event-based check if direct call fails
+                
+            }
+
+            try {
+                // Check created events
+                const createdEvents = await this.documentManagementContract.getPastEvents('DocumentCreated', {
+                    filter: {
+                        documentHash: formattedHash
+                    },
+                    fromBlock: 0,
+                    toBlock: 'latest'
+                });
+                
+                console.log('Found DocumentCreated events:', createdEvents.length);
+                if (createdEvents.length > 0) {
+                    return true;
+                }
+                
+                // If no created events, check if the document might be referenced in other events
+                const verifiedEvents = await this.documentManagementContract.getPastEvents('DocumentVerified', {
+                    filter: {
+                        documentHash: formattedHash
+                    },
+                    fromBlock: 0,
+                    toBlock: 'latest'
+                });
+                
+                console.log('Found DocumentVerified events:', verifiedEvents.length);
+                if (verifiedEvents.length > 0) {
+                    return true;
+                }
+                
+                // As a last resort, try to check by document ID if it might be stored differently
+                // This depends on your specific contract implementation
+                const allDocuments = await this.documentManagementContract.methods
+                    .getAllDocuments()
+                    .call()
+                    .catch(e => {
+                        console.log('getAllDocuments not available:', e.message);
+                        return [];
+                    });
+                    
+                const matchingDocument = allDocuments.find(doc => 
+                    doc.documentHash === formattedHash || 
+                    doc.documentHash === documentHash
+                );
+                
+                return !!matchingDocument;
+            } catch (eventsError) {
+                console.error('Error searching for document events:', eventsError);
+                return false;
+            }
+        } catch (error) {
+            console.error('Error verifying document on blockchain:', error);
+            return false;
         }
     }
     

@@ -1,4 +1,3 @@
-// services/blockchainMonitorService.js
 const {Web3} = require('web3');
 const DocumentManagementABI = require('../contracts/DocumentManagement.json');
 const Document = require('../models/Document');
@@ -15,28 +14,23 @@ class BlockchainMonitorService {
             process.env.DOCUMENT_MANAGEMENT_CONTRACT_ADDRESS
         );
         
-        // Block processing state
         this.lastProcessedBlock = 0;
         this.isMonitoring = false;
     }
     
-    // Start monitoring blockchain events
     async startMonitoring() {
         if (this.isMonitoring) return;
         
         this.isMonitoring = true;
         
         try {
-            // Get last processed block from DB or start from current block
             const currentBlock = await this.web3.eth.getBlockNumber();
-            this.lastProcessedBlock = currentBlock - 1000; // Start from 1000 blocks ago or use stored value
+            this.lastProcessedBlock = currentBlock - 1000; 
             
             console.log(`Starting blockchain monitor from block ${this.lastProcessedBlock}`);
             
-            // Set up event listeners
             this.setupEventListeners();
             
-            // Start block processor
             this.processBlocks();
         } catch (error) {
             console.error('Failed to start blockchain monitoring:', error);
@@ -44,9 +38,7 @@ class BlockchainMonitorService {
         }
     }
     
-    // Set up event listeners for new events
     setupEventListeners() {
-        // Listen for DocumentCreated events
         this.documentManagementContract.events.DocumentCreated({
             fromBlock: 'latest'
         })
@@ -57,7 +49,6 @@ class BlockchainMonitorService {
             console.error('DocumentCreated event error:', error);
         });
         
-        // Listen for DocumentVerified events
         this.documentManagementContract.events.DocumentVerified({
             fromBlock: 'latest'
         })
@@ -80,13 +71,11 @@ class BlockchainMonitorService {
         });
     }
     
-    // Process past blocks to catch up
     async processBlocks() {
         try {
             const currentBlock = await this.web3.eth.getBlockNumber();
             
             if (currentBlock <= this.lastProcessedBlock) {
-                // Schedule next check
                 setTimeout(() => this.processBlocks(), 15000);
                 return;
             }

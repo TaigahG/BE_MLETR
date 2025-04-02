@@ -9,14 +9,12 @@ class BlockchainService {
 
         if (process.env.BLOCKCHAIN_PRIVATE_KEY) {
             try {
-                // Make sure private key has 0x prefix
                 const privateKey = process.env.BLOCKCHAIN_PRIVATE_KEY.startsWith('0x') 
                     ? process.env.BLOCKCHAIN_PRIVATE_KEY 
                     : '0x' + process.env.BLOCKCHAIN_PRIVATE_KEY;
                 
                 this.account = this.web3.eth.accounts.privateKeyToAccount(privateKey);
                 
-                // Add account to wallet
                 this.web3.eth.accounts.wallet.add(this.account);
                 
                 console.log('Blockchain account initialized:', this.account.address);
@@ -214,84 +212,100 @@ class BlockchainService {
 
     async verifyDocumentOnBlockchain(documentHash) {
         try {
-
             if (!this.web3 || !this.documentManagementContract) {
                 console.error('Blockchain service not properly initialized');
                 return false;
             }
-
+    
             const formattedHash = documentHash.startsWith('0x') 
                 ? documentHash 
                 : '0x' + documentHash;
-
+    
             console.log('Formatted hash for blockchain query:', formattedHash);
-
+    
             try {
-                // Note: You might need to adjust this based on your contract structure
-                // This is just a hypothetical example
-                const documentExists = await this.documentManagementContract.methods
-                    .documentExists(formattedHash)
-                    .call();
-                    
-                if (documentExists) {
-                    console.log('Document found through direct contract call');
-                    return true;
-                }
-            } catch (directCallError) {
-                console.error('Error in direct contract call:', directCallError);
-                // Continue to event-based check if direct call fails
-                
-            }
-
-            try {
-                // Check created events
                 const createdEvents = await this.documentManagementContract.getPastEvents('DocumentCreated', {
-                    filter: {
-                        documentHash: formattedHash
-                    },
                     fromBlock: 0,
                     toBlock: 'latest'
                 });
                 
-                console.log('Found DocumentCreated events:', createdEvents.length);
-                if (createdEvents.length > 0) {
-                    return true;
-                }
+                console.log(`Found ${createdEvents.length} DocumentCreated events`);
                 
-                // If no created events, check if the document might be referenced in other events
-                const verifiedEvents = await this.documentManagementContract.getPastEvents('DocumentVerified', {
-                    filter: {
-                        documentHash: formattedHash
-                    },
-                    fromBlock: 0,
-                    toBlock: 'latest'
-                });
-                
-                console.log('Found DocumentVerified events:', verifiedEvents.length);
-                if (verifiedEvents.length > 0) {
-                    return true;
-                }
-                
-                // As a last resort, try to check by document ID if it might be stored differently
-                // This depends on your specific contract implementation
-                const allDocuments = await this.documentManagementContract.methods
-                    .getAllDocuments()
-                    .call()
-                    .catch(e => {
-                        console.log('getAllDocuments not available:', e.message);
-                        return [];
-                    });
+                for (const event of createdEvents) {
+                    const documentId = event.returnValues.documentId;
                     
-                const matchingDocument = allDocuments.find(doc => 
-                    doc.documentHash === formattedHash || 
-                    doc.documentHash === documentHash
-                );
-                
-                return !!matchingDocument;
+                    try {
+                        const document = await this.documentManagementContract.methods.documents(documentId).call();
+                        
+                        // Compare the document hash
+                        if (document && 
+                            (document.documentHash === formattedHash || 
+                             document.documentHash === documentHash.replace('0x', ''))) {
+                            console.log(`Document found with ID: ${documentId}`);
+                            return true;
+                        }
+                    } catch (docError) {
+                        console.log(`Error fetching document ${documentId}:`, docError.message);
+                    }
+                }
             } catch (eventsError) {
                 console.error('Error searching for document events:', eventsError);
-                return false;
             }
+    
+            try {
+                const verifiedEvents = await this.documentManagementContract.getPastEvents('DocumentVerified', {
+                    fromBlock: 0,
+                    toBlock: 'latest'
+                });
+                
+                console.log(`Found ${verifiedEvents.length} DocumentVerified events`);
+                
+                for (const event of verifiedEvents) {
+                    const documentId = event.returnValues.documentId;
+                    
+                    try {
+                        const document = await this.documentManagementContract.methods.documents(documentId).call();
+                        
+                        if (document && 
+                            (document.documentHash === formattedHash || 
+                             document.documentHash === documentHash.replace('0x', ''))) {
+                            console.log(`Verified document found with ID: ${documentId}`);
+                            return true;
+                        }
+                    } catch (docError) {
+                        console.log(`Error fetching verified document ${documentId}:`, docError.message);
+                        // Continue to the next document
+                    }
+                }
+            } catch (eventsError) {
+                console.error('Error searching for verification events:', eventsError);
+            }
+    
+            try {
+                const document = await Document.findOne({ documentHash });
+                
+                if (document && document.blockchainId) {
+                    console.log(`Attempting to fetch document with blockchain ID: ${document.blockchainId}`);
+                    
+                    try {
+                        const blockchainDocument = await this.documentManagementContract.methods
+                            .documents(document.blockchainId)
+                            .call();
+                        
+                        if (blockchainDocument) {
+                            console.log('Found document on blockchain via direct ID lookup');
+                            return true;
+                        }
+                    } catch (directFetchError) {
+                        console.error('Error fetching document by ID:', directFetchError);
+                    }
+                }
+            } catch (dbError) {
+                console.error('Error fetching document from database:', dbError);
+            }
+    
+            console.log('Document not found on blockchain after all verification attempts');
+            return false;
         } catch (error) {
             console.error('Error verifying document on blockchain:', error);
             return false;

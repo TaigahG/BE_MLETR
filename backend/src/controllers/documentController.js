@@ -2,6 +2,7 @@ const Document = require('../models/Document');
 const queueService = require('../services/queueService');
 const documentHistoryService = require('../services/documentHistoryService');
 const BlockchainService = require('../services/blockchainService')
+const TradeTrustVerificationService = require('../services/tradeTrustVerification');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs').promises;
@@ -521,63 +522,54 @@ class DocumentController {
 
     async verifyTradeTrustDocument(req, res) {
         console.log('TradeTrust verification request received:', req.body);
-
+      
         try {
-            const { documentHash } = req.body;
-            
-            if (!documentHash) {
-                return res.status(400).json({
-                    error: 'Document hash is required',
-                    code: 'MISSING_HASH'
-                });
-            }
-
-            console.log('Verifying document with hash:', documentHash);
-
-            
+          const { documentData, documentHash } = req.body;
+          
+          if (!documentData && !documentHash) {
+            return res.status(400).json({
+              error: 'Document data or hash is required',
+              code: 'MISSING_DATA'
+            });
+          }
+      
+          let verificationResult;
+          
+          if (documentData) {
+            verificationResult = await TradeTrustVerificationService.verifyDocument(documentData);
+          } else {
+            const isOnBlockchain = await BlockchainService.verifyDocumentOnBlockchain(documentHash);
             const document = await Document.findOne({ documentHash });
-            console.log('Document found in database:', !!document);
-
             
-            console.log('Checking document on blockchain...');
-            let isOnBlockchain = false;
-            try {
-                isOnBlockchain = await BlockchainService.verifyDocumentOnBlockchain(documentHash);
-                console.log('Document verified on blockchain:', isOnBlockchain);
-            } catch (blockchainError) {
-                console.error('Blockchain verification error:', blockchainError);
-            }
-            
-            
-            let response = {
-                verified: !!isOnBlockchain,
-                onBlockchain: !!isOnBlockchain,
-                inDatabase: !!document
+            verificationResult = {
+              verified: !!isOnBlockchain,
+              onBlockchain: !!isOnBlockchain,
+              inDatabase: !!document
             };
             
             if (document) {
-                response.document = {
-                    id: document._id,
-                    status: document.status,
-                    documentType: document.documentType,
-                    creator: document.creator,
-                    transactionHash: document.transactionHash,
-                    blockchainId: document.blockchainId,
-                    createdAt: document.createdAt
-                };
+              verificationResult.document = {
+                id: document._id,
+                status: document.status,
+                documentType: document.documentType,
+                creator: document.creator,
+                transactionHash: document.transactionHash,
+                blockchainId: document.blockchainId,
+                createdAt: document.createdAt
+              };
             }
-
-            console.log('Verification response:', response);
-            return res.json(response);
+          }
+      
+          return res.json(verificationResult);
         } catch (error) {
-            console.error('TradeTrust verification error:', error);
-            res.status(500).json({ 
-                error: error.message || 'Verification failed',
-                stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
-                code: 'SERVER_ERROR'
-            });
+          console.error('TradeTrust verification error:', error);
+          res.status(500).json({ 
+            error: error.message || 'Verification failed',
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+            code: 'SERVER_ERROR'
+          });
         }
-    }
+      }
 }
 
 module.exports = new DocumentController();

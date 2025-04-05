@@ -36,15 +36,69 @@ class BlockchainService {
             process.env.DOCUMENT_REGISTRY_CONTRACT_ADDRESS
         );
 
+        if (!process.env.DOCUMENT_MANAGEMENT_CONTRACT_ADDRESS) {
+            throw new Error('DOCUMENT_MANAGEMENT_CONTRACT_ADDRESS is not defined in environment variables');
+        }
+
         this.documentManagementContract = new this.web3.eth.Contract(
             DocumentManagementABI.abi, 
             process.env.DOCUMENT_MANAGEMENT_CONTRACT_ADDRESS
         );
 
+        this.listenForDocumentEvents();
+
         // this.checkRoles().catch(error => {
         //     console.error('Error during role check:', error);
         // });
     }
+
+async listenForDocumentEvents() {
+    this.documentManagementContract.events.DocumentCreated({
+      fromBlock: 'latest'
+    })
+    .on('data', async (event) => {
+      const { documentId, creator, category } = event.returnValues;
+      console.log(`Document ${documentId} created by ${creator}`);
+      
+      await this.processDocumentCreatedEvent(documentId, creator, category, event);
+    })
+
+    this.documentManagementContract.events.DocumentVerified({
+        fromBlock: 'latest'
+      })
+      .on('data', async (event) => {
+        const { documentId, creator, category } = event.returnValues;
+        console.log(`Document ${documentId} created by ${creator}`);
+        
+        // Process the event (e.g., update database)
+        await this.processDocumentCreatedEvent(documentId, creator, category, event);
+      })
+
+    
+    // Similar listeners for DocumentVerified and DocumentTransferred events
+  }
+  
+  async processDocumentCreatedEvent(documentId, creator, category, event) {
+    try {
+      const document = await Document.findOne({ 
+        blockchainId: documentId,
+        'metadata.creator': creator 
+      });
+      
+      if (document) {
+        document.status = 'Active';
+        document.transactionHash = event.transactionHash;
+        document.blockNumber = event.blockNumber;
+        await document.save();
+        
+        console.log(`Updated document ${documentId} status to Active`);
+      } else {
+        console.log(`Document ${documentId} created on blockchain but not found in database`);
+      }
+    } catch (error) {
+      console.error(`Error processing DocumentCreated event for document ${documentId}:`, error);
+    }
+  }
 
     async updateGasPrice() {
         try{

@@ -7,6 +7,10 @@ class BlockchainService {
     constructor() {
         this.web3 = new Web3(process.env.BLOCKCHAIN_PROVIDER);
 
+        this.pendingTransactions = new Map();
+        this.lastUsedNonce = null;
+        this.nonceInitialized = false;
+
         if (process.env.BLOCKCHAIN_PRIVATE_KEY) {
             try {
                 const privateKey = process.env.BLOCKCHAIN_PRIVATE_KEY.startsWith('0x') 
@@ -52,6 +56,34 @@ class BlockchainService {
         // });
     }
 
+
+    async initializedNonce(){
+        try{
+            if(!this.account){
+                throw new Error('No account to initialize nonce for');
+            }
+            const currentNonce = await this.web3.eth.getTransactionCount(this.account.address, 'pending');
+            this.lastUsedNonce = Number(currentNonce)-1;
+            this.nonceInitialized = true;
+            console.log(`Initialized nonce counter to ${this.lastUsedNonce}`);
+            return currentNonce;
+        }catch(error){
+            console.error('Error initializing nonce:', error);
+            throw error;
+        }
+    }
+
+    async getNonce() {
+        if (!this.nonceInitialized) {
+            await this.initializedNonce();
+        }
+        const currentNonce = await this.web3.eth.getTransactionCount(this.account.address, 'pending');
+        const currentNonceNumber = Number(currentNonce);
+        this.lastUsedNonce = Math.max(this.lastUsedNonce + 1, currentNonceNumber);
+
+        console.log(`Current nonce for ${this.account.address}: ${this.lastUsedNonce}`);
+        return this.lastUsedNonce;
+    }
 async listenForDocumentEvents() {
     this.documentManagementContract.events.DocumentCreated({
       fromBlock: 'latest'
@@ -70,12 +102,10 @@ async listenForDocumentEvents() {
         const { documentId, creator, category } = event.returnValues;
         console.log(`Document ${documentId} created by ${creator}`);
         
-        // Process the event (e.g., update database)
         await this.processDocumentCreatedEvent(documentId, creator, category, event);
       })
 
     
-    // Similar listeners for DocumentVerified and DocumentTransferred events
   }
   
   async processDocumentCreatedEvent(documentId, creator, category, event) {
@@ -165,8 +195,12 @@ async listenForDocumentEvents() {
                 throw new Error('No blockchain account configured');
             }
 
+            console.log('Account:', this.account.address);
+
             const sender = await this.getSenderAccounts();
             const expiryDate = BigInt(documentData.expiryDate);
+
+            const nonce = await this.getNonce();
 
             const gasEstimate = await this.documentManagementContract.methods.createDocument(
                 documentData.category,
@@ -177,6 +211,8 @@ async listenForDocumentEvents() {
             const gasToUse = BigInt(Math.floor(Number(gasEstimate) * 1.2));
             const gasPriceBigInt = BigInt(this.gasPrice);
 
+            console.log(`Sending transaction with nonce ${nonce}, gas ${gasToUse.toString()}, gasPrice ${gasPriceBigInt.toString()}`);
+
             const result = await this.documentManagementContract.methods.createDocument(
                 documentData.category,
                 this.web3.utils.sha3(documentData.documentHash),
@@ -184,7 +220,8 @@ async listenForDocumentEvents() {
             ).send({
                 from: sender,
                 gas: gasToUse.toString(),
-                gasPrice: gasPriceBigInt.toString()
+                gasPrice: gasPriceBigInt.toString(),
+                nonce: nonce
             })
 
             const documentCreatedEvent = result.events.DocumentCreated;
@@ -198,6 +235,10 @@ async listenForDocumentEvents() {
             };
         }
         catch(error){
+            if (error.message.includes('nonce too low')) {
+                console.error('Nonce error detected. Current nonce tracking may be incorrect.');
+                this.nonceInitialized = false;
+            }
             console.error('Document creation error:', error);
             throw new Error(`Document creation failed: ${error.message}`);
         }

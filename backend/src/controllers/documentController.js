@@ -537,6 +537,24 @@ class DocumentController {
           
           if (documentData) {
             verificationResult = await TradeTrustVerificationService.verifyDocument(documentData);
+
+            const document = documentData.signature?.targetHash
+                ? await Document.findOne({documentHash: documentData.signature.targetHash}) 
+                : null
+            
+            verificationResult.inDtabase = !!document;
+            
+            if (document) {
+              verificationResult.document = {
+                id: document._id,
+                status: document.status,
+                documentType: document.documentType,
+                creator: document.creator,
+                transactionHash: document.transactionHash,
+                blockchainId: document.blockchainId,
+                createdAt: document.createdAt
+              };
+            }
           } else {
             const isOnBlockchain = await BlockchainService.verifyDocumentOnBlockchain(documentHash);
             const document = await Document.findOne({ documentHash });

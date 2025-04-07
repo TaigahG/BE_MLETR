@@ -1,6 +1,5 @@
 // backend/src/services/tradeTrustVerificationService.js
-const { verify, isValid } = require('@govtechsg/oa-verify');
-const { wrapDocument } = require('@govtechsg/open-attestation');
+const { verify } = require('@tradetrust-tt/tt-verify');
 const BlockchainService = require('./blockchainService');
 
 class TradeTrustVerificationService {
@@ -8,10 +7,13 @@ class TradeTrustVerificationService {
     try {
       const isOAFormat = documentData.version === 'https://schema.openattestation.com/2.0/schema.json';
       
-      const document = isOAFormat ? documentData : wrapDocument(documentData);
-      
-      const verificationResults = await verify(document);
-      const isDocumentValid = isValid(verificationResults);
+      if(!isOAFormat) {
+        throw new Error('Invalid document format. Expected OpenAttestation format.');
+      }
+
+
+      const verificationResults = await verify(documentData);
+      const isDocumentValid = verificationResults.every(result => result.status === "VALID");
       
       const documentHash = document.signature?.targetHash || documentData.documentHash;
       
@@ -24,8 +26,8 @@ class TradeTrustVerificationService {
       
       return {
         verified: isDocumentValid && blockchainVerification,
-        documentIntegrity: documentIntegrity?.status === "VALID",
         onBlockchain: blockchainVerification,
+        inDtabase: true,
         details: verificationResults
       };
     } catch (error) {

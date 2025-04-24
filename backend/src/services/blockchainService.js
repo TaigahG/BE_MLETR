@@ -2,6 +2,8 @@ const { Web3 } = require('web3');
 const DocumentRegistryABI = require('../contracts/DocumentRegistry.json');
 const DocumentManagementABI = require('../contracts/DocumentManagement.json');
 const { events } = require('../models/User');
+const Document = require('../models/Document');
+const User = require('../models/User');
 
 class BlockchainService {
     constructor() {
@@ -49,8 +51,6 @@ class BlockchainService {
             process.env.DOCUMENT_MANAGEMENT_CONTRACT_ADDRESS
         );
 
-        this.listenForDocumentEvents();
-
         // this.checkRoles().catch(error => {
         //     console.error('Error during role check:', error);
         // });
@@ -84,29 +84,28 @@ class BlockchainService {
         console.log(`Current nonce for ${this.account.address}: ${this.lastUsedNonce}`);
         return this.lastUsedNonce;
     }
-async listenForDocumentEvents() {
-    this.documentManagementContract.events.DocumentCreated({
-      fromBlock: 'latest'
-    })
-    .on('data', async (event) => {
-      const { documentId, creator, category } = event.returnValues;
-      console.log(`Document ${documentId} created by ${creator}`);
-      
-      await this.processDocumentCreatedEvent(documentId, creator, category, event);
-    })
-
-    this.documentManagementContract.events.DocumentVerified({
+    async listenForDocumentEvents() {
+        this.documentManagementContract.events.DocumentCreated({
         fromBlock: 'latest'
-      })
-      .on('data', async (event) => {
+        })
+        .on('data', async (event) => {
         const { documentId, creator, category } = event.returnValues;
         console.log(`Document ${documentId} created by ${creator}`);
         
         await this.processDocumentCreatedEvent(documentId, creator, category, event);
-      })
+        })
 
-    
-  }
+        this.documentManagementContract.events.DocumentVerified({
+            fromBlock: 'latest'
+        })
+        .on('data', async (event) => {
+            const { documentId, creator, category } = event.returnValues;
+            console.log(`Document ${documentId} created by ${creator}`);
+            
+            await this.processDocumentCreatedEvent(documentId, creator, category, event);
+        })
+
+    }
   
   async processDocumentCreatedEvent(documentId, creator, category, event) {
     try {
@@ -225,6 +224,7 @@ async listenForDocumentEvents() {
             })
 
             const documentCreatedEvent = result.events.DocumentCreated;
+            console.log("DocEV: ",documentCreatedEvent)
             if(!documentCreatedEvent) {
                 throw new Error('Document creation transaction did not emit DocumentCreated event');
             }
@@ -305,28 +305,114 @@ async listenForDocumentEvents() {
     }
 
 
-    async verifyDocumentOnBlockchain(documentHash) {
+    async verifyDocumentOnBlockchain(documentHash, userId, res) {
+        function stringToUint8Array(str) {
+            const encoder = new TextEncoder();
+            return encoder.encode(str);
+          }
         try {
+            if(!documentHash){
+                throw new Error('Document hash not provided');
+            }
             const formattedHash = documentHash.startsWith('0x') 
                 ? documentHash 
                 : '0x' + documentHash;
             
-            // Query the blockchain to verify the document exists
-            // This is a simplified implementation - you'd need to adjust based on your blockchain structure
-            const documentEvents = await this.documentManagementContract.getPastEvents('DocumentCreated', {
-                filter: {
-                    documentHash: formattedHash
-                },
-                fromBlock: 0,
-                toBlock: 'latest'
-            });
+            console.log("formatted documents: ", formattedHash);
+
+            const document = await Document.findOne({documentHash: documentHash.replace('/0x/', '')});
+
+            console.log(`Document status before checking is  '${document.status}' verified by ${userId}`)
+
+
+            if(document){
+                console.log("found document with hash: ", document)
+
+                if(document.status === 'Verified'){
+                    console.log(`Document already verified by ${document.verifiedBy}`);
+                    return true;
+                }
+
+                if(document.blockchainId && document.transactionHash){
+                    await Document.findByIdAndUpdate(document.id,{
+                        status: 'Verified',
+                        verifiedBy: userId,
+                        verifiedAt: new Date()
+                    })
+                    console.log(`Document status after checking is '${document.status}' verified by ${userId}`)
+                    return true;
+                }
+            }
             
-            return documentEvents.length > 0;
+            try{
+                const documentEvents = await this.documentManagementContract.getPastEvents('DocumentCreated', {
+                    filter: {
+                        documentHash: formattedHash
+                    },
+                    fromBlock: 0,
+                    toBlock: 'latest'
+                });
+
+                for(const events in documentEvents){
+                    if(events.returnValues.documentId && events.returnValues.documentHash === formattedHash){
+                        return true;
+                    }
+                }
+            }catch(err){
+                console.error('Error querying blockchain events:', queryError);
+            }
+
+           
+            return false;
         } catch (error) {
             console.error('Error verifying document on blockchain:', error);
             return false;
         }
     }
+
+
+    // // Add this helper function to your BlockchainService
+    // async inspectDocumentEvents() {
+    //     try {
+    //     console.log('Inspecting document events structure...');
+        
+    //     // Get some past events
+    //     const events = await this.documentManagementContract.getPastEvents('DocumentCreated', {
+    //         fromBlock: 0,
+    //         toBlock: 'latest',
+    //         limit: 5 // Just get a few for inspection
+    //     });
+        
+    //     if (events.length === 0) {
+    //         console.log('No document events found.');
+    //         return;
+    //     }
+        
+    //     // Log the structure of the first event
+    //     console.log('Sample event structure:', JSON.stringify(events[0], (key, value) => 
+    //         typeof value === 'bigint' ? value.toString() : value, 2));
+        
+    //     // For each event, try to get the document data from the contract
+    //     for (const event of events) {
+    //         const documentId = event.returnValues.documentId;
+    //         console.log(`\nDocument ID: ${documentId}`);
+            
+    //         try {
+    //         // This is a placeholder - you'll need to create a method to get document by ID
+    //         // if your contract has such a function
+    //         const document = await this.documentManagementContract.methods
+    //             .documents(documentId) // Assuming there's a public mapping or getter
+    //             .call();
+                
+    //         console.log('Document hash from contract:', document.documentHash);
+    //         } catch (error) {
+    //         console.log('Could not retrieve document hash from contract:', error.message);
+    //         }
+    //     }
+    //     } catch (error) {
+    //     console.error('Error inspecting events:', error);
+    //     }
+    // }
     
 
 }

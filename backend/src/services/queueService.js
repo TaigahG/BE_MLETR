@@ -30,19 +30,26 @@ documentCreationQueue.process(async (job) => {
     const { documentData, documentId } = job.data;
     
     try {
+        console.log(`Processing document creation job for document ${documentId}`);
+        console.log('Document data:', documentData);
+
         const blockchainResponse = await BlockchainService.createDocument(documentData);
         console.log('Blockchain response:', blockchainResponse);
         
-        await Document.findByIdAndUpdate(documentId, {
+        const document = await Document.findByIdAndUpdate(documentId, {
             blockchainId: blockchainResponse.documentId,       
             transactionHash: blockchainResponse.transactionHash, 
             blockNumber: Number(blockchainResponse.blockNumber),       
             status: 'Active'                              
-        });
+        }, { new: true });
+
+        console.log("document queue: ", document)
+
+        console.log(`Document ${documentId} updated with blockchain data`);
         
-        return blockchainResponse;
+        return {document, blockchainResponse};
     } catch (error) {
-        console.error('Document creation queue error:', error);
+        console.error(`Error in document creation job for document ${documentId}:`, error);
         
         await Document.findByIdAndUpdate(documentId, {
             status: 'Error',

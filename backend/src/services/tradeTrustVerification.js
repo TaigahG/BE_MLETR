@@ -1,4 +1,3 @@
-// backend/src/services/tradeTrustVerificationService.js
 const { verify } = require('@tradetrust-tt/tt-verify');
 const BlockchainService = require('./blockchainService');
 
@@ -10,25 +9,42 @@ class TradeTrustVerificationService {
       if(!isOAFormat) {
         throw new Error('Invalid document format. Expected OpenAttestation format.');
       }
-
-
-      const verificationResults = await verify(documentData);
-      const isDocumentValid = verificationResults.every(result => result.status === "VALID");
       
       const documentHash = document.signature?.targetHash || documentData.documentHash;
+      if(!documentHash){
+        throw new Error('Document hash not found. Cannot verify document on blockchain.');
+      }
+
+      const document = await Document.findOne({ hash: documentHash });
+      const inDatabase = !!document;
       
       let blockchainVerification = false;
-      if (documentHash) {
+      
+      try{
         blockchainVerification = await BlockchainService.verifyDocumentOnBlockchain(documentHash);
+      } catch (error) {
+        console.error('Blockchain verification error:', error);
       }
-      
-      const documentIntegrity = verificationResults.find(r => r.type === "DOCUMENT_INTEGRITY");
-      
+
+      let verificationResults = [];
+      try{
+        verificationResults = await verify(documentData);
+      }catch (error) {
+        console.error('Trade trust verification error:', error);
+      }
+            
       return {
-        verified: isDocumentValid && blockchainVerification,
+        verified: inDatabase || blockchainVerification,
         onBlockchain: blockchainVerification,
-        inDtabase: true,
-        details: verificationResults
+        inDatabase: inDatabase,
+        documentDetails: document ? {
+          id: document._id,
+          status: document.status,
+          documentType: document.documentType,
+          creator: document.creator,
+          createdAt: document.createdAt
+        } : null,
+        tradeTrustVerification: verificationResults
       };
     } catch (error) {
       console.error('TradeTrust verification error:', error);

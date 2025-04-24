@@ -205,7 +205,6 @@ class DocumentController {
                 });
             }
             
-            // If a document hash is provided, verify it matches our stored hash
             if (documentHash && documentHash !== document.documentHash) {
                 return res.status(400).json({
                     error: 'Document hash does not match',
@@ -213,7 +212,6 @@ class DocumentController {
                 });
             }
             
-            // If hash matches, continue with blockchain verification
             if (document.status === 'Verified') {
                 return res.status(200).json({
                     verified: true,
@@ -525,6 +523,11 @@ class DocumentController {
       
         try {
           const { documentData, documentHash } = req.body;
+          const userId =  req.user._id
+          console.log(`User: ${userId}`)
+          console.log("DocData: ",documentData)
+          console.log("DocHash: ",documentHash)
+
           
           if (!documentData && !documentHash) {
             return res.status(400).json({
@@ -535,32 +538,15 @@ class DocumentController {
       
           let verificationResult;
           
+          
           if (documentData) {
             verificationResult = await TradeTrustVerificationService.verifyDocument(documentData);
-
-            const document = documentData.signature?.targetHash
-                ? await Document.findOne({documentHash: documentData.signature.targetHash}) 
-                : null
-            
-            verificationResult.inDtabase = !!document;
-            
-            if (document) {
-              verificationResult.document = {
-                id: document._id,
-                status: document.status,
-                documentType: document.documentType,
-                creator: document.creator,
-                transactionHash: document.transactionHash,
-                blockchainId: document.blockchainId,
-                createdAt: document.createdAt
-              };
-            }
           } else {
-            const isOnBlockchain = await BlockchainService.verifyDocumentOnBlockchain(documentHash);
+            const isOnBlockchain = await BlockchainService.verifyDocumentOnBlockchain(documentHash, userId, res);
             const document = await Document.findOne({ documentHash });
             
             verificationResult = {
-              verified: !!isOnBlockchain,
+              verified: !!isOnBlockchain || !!document,
               onBlockchain: !!isOnBlockchain,
               inDatabase: !!document
             };

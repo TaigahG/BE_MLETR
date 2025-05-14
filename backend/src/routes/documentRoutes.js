@@ -1,6 +1,8 @@
 const express = require('express');
 const DocumentController = require('../controllers/documentController');
 const authMiddleware = require('../middleware/authMiddleware');
+const { verificationLimiter } = require('../middleware/rateLimiter');
+
 
 const router = express.Router();
 
@@ -60,15 +62,29 @@ router.post(
 );
 
 router.post(
-    '/:documentId/transfer', 
+    '/:documentId/transfer',
     authMiddleware.authenticate,
-    DocumentController.transferDocument
+    DocumentController.transferTransferableDocument
 );
 
 router.post(
     '/verify-tradetrust',
     authMiddleware.authenticate,
     DocumentController.verifyTradeTrustDocument
+);
+
+router.post(
+    '/verify-tradetrust',
+    verificationLimiter, // Apply rate limiting
+    authMiddleware.authenticate,
+    DocumentController.verifyTradeTrustDocument
+);
+
+  
+router.get(
+'/:documentId/ownership',
+authMiddleware.authenticate,
+DocumentController.getDocumentOwnership
 );
 
 module.exports = router;

@@ -304,72 +304,361 @@ class BlockchainService {
         }
     }
 
-
-    async verifyDocumentOnBlockchain(documentHash, userId, res) {
-        function stringToUint8Array(str) {
-            const encoder = new TextEncoder();
-            return encoder.encode(str);
-          }
+async verifyDocumentOnBlockchain(documentHash) {
+    try {
+      const formattedHash = documentHash.startsWith('0x') 
+        ? documentHash 
+        : '0x' + documentHash;
+      
+      const Document = require('../models/Document');
+      const document = await Document.findOne({ documentHash: formattedHash.substring(2) });
+      
+      // If found in db, check status on blockchain
+      if (document && document.blockchainId) {
         try {
-            if(!documentHash){
-                throw new Error('Document hash not provided');
-            }
-            const formattedHash = documentHash.startsWith('0x') 
-                ? documentHash 
-                : '0x' + documentHash;
-            
-            console.log("formatted documents: ", formattedHash);
-
-            const document = await Document.findOne({documentHash: documentHash.replace('/0x/', '')});
-
-            console.log(`Document status before checking is  '${document.status}' verified by ${userId}`)
-
-
-            if(document){
-                console.log("found document with hash: ", document)
-
-                if(document.status === 'Verified'){
-                    console.log(`Document already verified by ${document.verifiedBy}`);
-                    return true;
-                }
-
-                if(document.blockchainId && document.transactionHash){
-                    await Document.findByIdAndUpdate(document.id,{
-                        status: 'Verified',
-                        verifiedBy: userId,
-                        verifiedAt: new Date()
-                    })
-                    console.log(`Document status after checking is '${document.status}' verified by ${userId}`)
-                    return true;
-                }
-            }
-            
-            try{
-                const documentEvents = await this.documentManagementContract.getPastEvents('DocumentCreated', {
-                    filter: {
-                        documentHash: formattedHash
-                    },
-                    fromBlock: 0,
-                    toBlock: 'latest'
-                });
-
-                for(const events in documentEvents){
-                    if(events.returnValues.documentId && events.returnValues.documentHash === formattedHash){
-                        return true;
-                    }
-                }
-            }catch(err){
-                console.error('Error querying blockchain events:', queryError);
-            }
-
-           
-            return false;
+          const documentData = await this.documentManagementContract.methods
+            .getDocument(document.blockchainId)
+            .call();
+          
+          return {
+            exists: true,
+            blockchainId: document.blockchainId,
+            status: this.mapBlockchainStatus(documentData.status),
+            issuer: documentData.creator,
+            currentHolder: documentData.currentHolder,
+            expiryDate: new Date(Number(documentData.expiryDate) * 1000),
+            isExpired: Number(documentData.expiryDate) * 1000 < Date.now(),
+            isRevoked: documentData.status === '4' // Assuming 4 is revoked status
+          };
         } catch (error) {
-            console.error('Error verifying document on blockchain:', error);
-            return false;
+          console.error('Error getting document from blockchain:', error);
+          return { exists: false, error: 'Error fetching from blockchain' };
+        }
+      }
+      
+      // If not found in db or no blockchainId, search blockchain events
+      try {
+        const events = await this.documentManagementContract.getPastEvents('DocumentCreated', {
+          filter: {
+            documentHash: formattedHash
+          },
+          fromBlock: 0,
+          toBlock: 'latest'
+        });
+        
+        if (events.length > 0) {
+          // Document exists on blockchain but might not be in our database
+          const event = events[0];
+          const documentId = event.returnValues.documentId;
+          
+          // Get full document data from blockchain
+          const documentData = await this.documentManagementContract.methods
+            .getDocument(documentId)
+            .call();
+          
+          return {
+            exists: true,
+            blockchainId: documentId,
+            status: this.mapBlockchainStatus(documentData.status),
+            issuer: documentData.creator,
+            currentHolder: documentData.currentHolder,
+            expiryDate: new Date(Number(documentData.expiryDate) * 1000),
+            isExpired: Number(documentData.expiryDate) * 1000 < Date.now(),
+            isRevoked: documentData.status === '4'
+          };
+        }
+        
+        return { exists: false };
+      } catch (error) {
+        console.error('Error searching blockchain for document:', error);
+        return { exists: false, error: 'Blockchain search error' };
+      }
+    } catch (error) {
+      console.error('Error verifying document on blockchain:', error);
+      return { exists: false, error: error.message };
+    }
+  }
+  
+  // Helper method to check document revocation
+  async checkDocumentRevocation(documentHash) {
+    try {
+      const blockchainStatus = await this.verifyDocumentOnBlockchain(documentHash);
+      return blockchainStatus.isRevoked === true;
+    } catch (error) {
+      console.error('Error checking document revocation:', error);
+      return false;
+    }
+  }
+  
+  // Helper to map numeric blockchain status to readable status
+  mapBlockchainStatus(statusCode) {
+    const statusMap = {
+      '0': 'Draft',
+      '1': 'Active',
+      '2': 'Verified',
+      '3': 'Transferred',
+      '4': 'Revoked'
+    };
+    
+    return statusMap[statusCode] || 'Unknown';
+  }
+
+  async transferTransferableDocument(documentHash, newBeneficiary, newHolder) {
+    try {
+      const tokenId = await this.tokenRegistryContract.methods
+        .getTokenIdByDocumentHash(documentHash)
+        .call();
+      
+      if (!tokenId || tokenId === '0') {
+        throw new Error('Document not found in token registry');
+      }
+      
+      const escrowAddress = await this.documentTransferManagerContract.methods
+        .getEscrowByDocumentHash(documentHash)
+        .call();
+      
+      if (!escrowAddress) {
+        throw new Error('Title escrow not found for document');
+      }
+      
+      const titleEscrowContract = new this.web3.eth.Contract(
+        TitleEscrowABI,
+        escrowAddress
+      );
+      
+      const beneficiary = await titleEscrowContract.methods.beneficiary().call();
+      const holder = await titleEscrowContract.methods.holder().call();
+      
+      if (beneficiary.toLowerCase() !== this.account.address.toLowerCase() || 
+          holder.toLowerCase() !== this.account.address.toLowerCase()) {
+        throw new Error('Only the current beneficiary and holder can transfer the document');
+      }
+      
+      const gasEstimate = await titleEscrowContract.methods
+        .endorseTransfer(newBeneficiary, newHolder)
+        .estimateGas({ from: this.account.address });
+        
+      const result = await titleEscrowContract.methods
+        .endorseTransfer(newBeneficiary, newHolder)
+        .send({
+          from: this.account.address,
+          gas: Math.floor(gasEstimate * 1.2),
+          gasPrice: this.gasPrice
+        });
+        
+      return {
+        transactionHash: result.transactionHash,
+        blockNumber: Number(result.blockNumber),
+        events: result.events,
+        escrowAddress
+      };
+    } catch (error) {
+      console.error('Error transferring transferable document:', error);
+      throw new Error(`Blockchain transfer error: ${error.message}`);
+    }
+  }
+  
+  async createTransferableDocument(documentData) {
+    try {
+      const { documentHash } = documentData;
+      
+      if (!documentHash) {
+        throw new Error('Document hash is required');
+      }
+      
+      // Generate token ID and mint the token
+      const tokenId = await this.tokenRegistryContract.methods
+        .mint(this.account.address, documentHash)
+        .send({
+          from: this.account.address,
+          gas: 500000,
+          gasPrice: this.gasPrice
+        });
+      
+      // Create a title escrow for the document
+      const titleEscrowAddress = await this.documentTransferManagerContract.methods
+        .createTransferableDocument(
+          documentHash,
+          this.account.address, // Initial beneficiary
+          this.account.address  // Initial holder
+        )
+        .send({
+          from: this.account.address,
+          gas: 1000000,
+          gasPrice: this.gasPrice
+        });
+      
+      return {
+        tokenId,
+        titleEscrowAddress,
+        beneficiary: this.account.address,
+        holder: this.account.address
+      };
+    } catch (error) {
+      console.error('Error creating transferable document:', error);
+      throw new Error(`Blockchain error: ${error.message}`);
+    }
+  }
+    async getDocumentOwnership(documentHash, blockchainId) {
+        try {
+          // First check if the document exists in DocumentTransferManager
+          const escrowAddress = await this.documentTransferManagerContract.methods
+            .getEscrowByDocumentHash(documentHash)
+            .call();
+          
+          if (!escrowAddress || escrowAddress === '0x0000000000000000000000000000000000000000') {
+            // If not in the transfer manager, check the token registry directly
+            const tokenId = await this.tokenRegistryContract.methods
+              .getTokenIdByDocumentHash(documentHash)
+              .call();
+            
+            if (!tokenId || tokenId === '0') {
+              throw new Error('Document not found in token registry');
+            }
+            
+            // Get the owner from the token registry
+            const owner = await this.tokenRegistryContract.methods
+              .ownerOf(tokenId)
+              .call();
+            
+            return {
+              beneficiary: owner,
+              holder: owner,
+              escrowAddress: null,
+              isInEscrow: false
+            };
+          }
+          
+          // If in escrow, get the current beneficiary and holder
+          const titleEscrowContract = new this.web3.eth.Contract(
+            TitleEscrowABI,
+            escrowAddress
+          );
+          
+          const beneficiary = await titleEscrowContract.methods.beneficiary().call();
+          const holder = await titleEscrowContract.methods.holder().call();
+          const isSurrendered = await titleEscrowContract.methods.isSurrendered().call();
+          
+          return {
+            beneficiary,
+            holder,
+            escrowAddress,
+            isInEscrow: true,
+            isSurrendered
+          };
+        } catch (error) {
+          console.error('Error getting document ownership:', error);
+          throw new Error(`Blockchain error: ${error.message}`);
+        }
+      }
+      
+      async transferDocumentOwnership(documentHash, newBeneficiary, newHolder) {
+        try {
+          // Check if the document exists and is in escrow
+          const ownershipInfo = await this.getDocumentOwnership(documentHash);
+          
+          if (!ownershipInfo.isInEscrow) {
+            throw new Error('Document is not in escrow, cannot transfer');
+          }
+          
+          if (ownershipInfo.isSurrendered) {
+            throw new Error('Document has been surrendered, cannot transfer');
+          }
+          
+          // Get the escrow contract
+          const titleEscrowContract = new this.web3.eth.Contract(
+            TitleEscrowABI,
+            ownershipInfo.escrowAddress
+          );
+          
+          // Check if the caller is the current beneficiary and holder
+          const currentBeneficiary = ownershipInfo.beneficiary;
+          const currentHolder = ownershipInfo.holder;
+          
+          if (currentBeneficiary.toLowerCase() !== this.account.address.toLowerCase() ||
+              currentHolder.toLowerCase() !== this.account.address.toLowerCase()) {
+            throw new Error('Only the current beneficiary and holder can transfer ownership');
+          }
+          
+          // Transfer ownership
+          const gasEstimate = await titleEscrowContract.methods
+            .endorseTransfer(newBeneficiary, newHolder)
+            .estimateGas({ from: this.account.address });
+          
+          const result = await titleEscrowContract.methods
+            .endorseTransfer(newBeneficiary, newHolder)
+            .send({
+              from: this.account.address,
+              gas: Math.floor(gasEstimate * 1.2),
+              gasPrice: this.gasPrice
+            });
+          
+          return {
+            transactionHash: result.transactionHash,
+            blockNumber: Number(result.blockNumber),
+            previousBeneficiary: currentBeneficiary,
+            previousHolder: currentHolder,
+            newBeneficiary,
+            newHolder,
+            escrowAddress: ownershipInfo.escrowAddress
+          };
+        } catch (error) {
+          console.error('Error transferring document ownership:', error);
+          throw new Error(`Blockchain error: ${error.message}`);
+        }
+      }
+      
+      async verifyTransferableDocument(documentHash) {
+        try {
+          // Check if the document exists in the token registry
+          const tokenId = await this.tokenRegistryContract.methods
+            .getTokenIdByDocumentHash(documentHash)
+            .call();
+          
+          if (!tokenId || tokenId === '0') {
+            return {
+              exists: false,
+              message: 'Document not found in token registry'
+            };
+          }
+          
+          // Check if the document is valid (not revoked)
+          const isValid = await this.tokenRegistryContract.methods
+            .isValidDocument(tokenId)
+            .call();
+          
+          if (!isValid) {
+            return {
+              exists: true,
+              isValid: false,
+              message: 'Document has been revoked'
+            };
+          }
+          
+          // Get document data
+          const documentData = await this.tokenRegistryContract.methods
+            .getDocumentData(tokenId)
+            .call();
+          
+          // Get ownership information
+          const ownershipInfo = await this.getDocumentOwnership(documentHash);
+          
+          return {
+            exists: true,
+            isValid: true,
+            tokenId,
+            issuer: documentData.issuer,
+            issuedAt: new Date(Number(documentData.issuedAt) * 1000),
+            beneficiary: ownershipInfo.beneficiary,
+            holder: ownershipInfo.holder,
+            isInEscrow: ownershipInfo.isInEscrow,
+            escrowAddress: ownershipInfo.escrowAddress
+          };
+        } catch (error) {
+          console.error('Error verifying transferable document:', error);
+          throw new Error(`Blockchain error: ${error.message}`);
         }
     }
-
 
     // // Add this helper function to your BlockchainService
     // async inspectDocumentEvents() {

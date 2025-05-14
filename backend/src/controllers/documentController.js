@@ -519,40 +519,45 @@ class DocumentController {
     }
 
     async verifyTradeTrustDocument(req, res) {
-        console.log('TradeTrust verification request received:', req.body);
-      
+        console.log('TradeTrust verification request received');
+        
         try {
-          const { documentData, documentHash } = req.body;
-          const userId =  req.user._id
-          console.log(`User: ${userId}`)
-          console.log("DocData: ",documentData)
-          console.log("DocHash: ",documentHash)
-
-          
-          if (!documentData && !documentHash) {
+        const { documentData, documentHash } = req.body;
+        
+        if (!documentData && !documentHash) {
             return res.status(400).json({
-              error: 'Document data or hash is required',
-              code: 'MISSING_DATA'
+            error: 'Document data or hash is required',
+            code: 'MISSING_DATA'
             });
-          }
-      
-          let verificationResult;
-          
-          
-          if (documentData) {
+        }
+        
+        let verificationResult = {
+            verified: false,
+            onBlockchain: false,
+            inDatabase: false,
+            didVerified: false,
+            dnsVerified: false,
+            revoked: false,
+            issuer: null,
+            currentHolder: null,
+            expiryDate: null,
+            isExpired: false,
+            details: {}
+        };
+        
+        if (documentData) {
             verificationResult = await TradeTrustVerificationService.verifyDocument(documentData);
-          } else {
-            const isOnBlockchain = await BlockchainService.verifyDocumentOnBlockchain(documentHash, userId, res);
-            const document = await Document.findOne({ documentHash });
             
-            verificationResult = {
-              verified: !!isOnBlockchain || !!document,
-              onBlockchain: !!isOnBlockchain,
-              inDatabase: !!document
-            };
+            // Check if document is in our database
+            const documentHashToCheck = documentData.signature?.targetHash || documentHash;
+            const document = documentHashToCheck
+            ? await Document.findOne({ documentHash: documentHashToCheck.replace(/^0x/, '') })
+            : null;
+            
+            verificationResult.inDatabase = !!document;
             
             if (document) {
-              verificationResult.document = {
+            verificationResult.document = {
                 id: document._id,
                 status: document.status,
                 documentType: document.documentType,
@@ -560,20 +565,243 @@ class DocumentController {
                 transactionHash: document.transactionHash,
                 blockchainId: document.blockchainId,
                 createdAt: document.createdAt
-              };
+            };
+            
+            if (document.blockchainId) {
+                const blockchainStatus = await BlockchainService.verifyDocumentOnBlockchain(documentHashToCheck);
+                
+                verificationResult = {
+                ...verificationResult,
+                onBlockchain: blockchainStatus.exists,
+                issuer: blockchainStatus.issuer,
+                currentHolder: blockchainStatus.currentHolder,
+                expiryDate: blockchainStatus.expiryDate,
+                isExpired: blockchainStatus.isExpired,
+                revoked: blockchainStatus.isRevoked
+                };
             }
-          }
-      
-          return res.json(verificationResult);
+            
+            await document.updateVerificationDetails({
+                documentIntegrity: verificationResult.details.documentIntegrity || false,
+                issuerIdentity: verificationResult.details.issuerIdentity || false,
+                didVerified: verificationResult.didVerified || false,
+                dnsVerified: verificationResult.dnsVerified || false,
+                onBlockchain: verificationResult.onBlockchain || false,
+                revoked: verificationResult.revoked || false
+            });
+            }
+        } else if (documentHash) {
+            const isOnBlockchain = await BlockchainService.verifyDocumentOnBlockchain(documentHash);
+            const document = await Document.findOne({
+            documentHash: documentHash.replace(/^0x/, '')
+            });
+            
+            verificationResult = {
+            verified: isOnBlockchain.exists && !isOnBlockchain.isRevoked,
+            onBlockchain: isOnBlockchain.exists,
+            inDatabase: !!document,
+            revoked: isOnBlockchain.isRevoked,
+            issuer: isOnBlockchain.issuer,
+            currentHolder: isOnBlockchain.currentHolder,
+            expiryDate: isOnBlockchain.expiryDate,
+            isExpired: isOnBlockchain.isExpired
+            };
+            
+            if (document) {
+            verificationResult.document = {
+                id: document._id,
+                status: document.status,
+                documentType: document.documentType,
+                creator: document.creator,
+                transactionHash: document.transactionHash,
+                blockchainId: document.blockchainId,
+                createdAt: document.createdAt
+            };
+            }
+        }
+        
+        await this.logVerificationAttempt({
+            userId: req.user._id,
+            documentId: verificationResult.document?.id,
+            documentHash: documentHash || documentData?.signature?.targetHash,
+            successful: verificationResult.verified,
+            result: verificationResult
+        });
+        
+        return res.json(verificationResult);
         } catch (error) {
-          console.error('TradeTrust verification error:', error);
-          res.status(500).json({ 
+        console.error('TradeTrust verification error:', error);
+        res.status(500).json({ 
             error: error.message || 'Verification failed',
             stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
             code: 'SERVER_ERROR'
-          });
+        });
         }
+    }
+  
+  async logVerificationAttempt(data) {
+    try {
+      const VerificationLog = require('../models/VerificationLog');
+      await VerificationLog.create({
+        userId: data.userId,
+        documentId: data.documentId,
+        documentHash: data.documentHash,
+        successful: data.successful,
+        verificationDetails: data.result,
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+        timestamp: new Date()
+      });
+    } catch (error) {
+      console.error('Error logging verification attempt:', error);
+      // Non-blocking - continue even if logging fails
+    }
+  }
+
+async transferTransferableDocument(req, res) {
+    try {
+      const { documentId } = req.params;
+      const { newBeneficiary, newHolder } = req.body;
+      const userId = req.user._id;
+      
+      if (!newBeneficiary || !newHolder) {
+        return res.status(400).json({
+          error: 'New beneficiary and holder addresses are required',
+          code: 'MISSING_PARAMETERS'
+        });
       }
+      
+      if (!this.web3.utils.isAddress(newBeneficiary) || !this.web3.utils.isAddress(newHolder)) {
+        return res.status(400).json({
+          error: 'Invalid Ethereum addresses provided',
+          code: 'INVALID_ADDRESSES'
+        });
+      }
+      
+      const document = await Document.findById(documentId);
+      
+      if (!document) {
+        return res.status(404).json({
+          error: 'Document not found',
+          code: 'DOCUMENT_NOT_FOUND'
+        });
+      }
+      
+      if (document.documentType !== 'Transferable') {
+        return res.status(400).json({
+          error: 'Document is not transferable',
+          code: 'NON_TRANSFERABLE_DOCUMENT'
+        });
+      }
+      
+ 
+      if (document.creator.toString() !== userId.toString() &&
+          !document.endorsementChain.includes(userId)) {
+        return res.status(403).json({
+          error: 'You do not have permission to transfer this document',
+          code: 'UNAUTHORIZED_TRANSFER'
+        });
+      }
+      
+      const job = await queueService.addDocumentTransfer(
+        documentId,
+        {
+          newBeneficiary,
+          newHolder
+        },
+        userId
+      );
+      
+      document.status = 'PendingTransfer';
+      await document.save();
+      
+      res.json({
+        message: 'Document transfer initiated',
+        document,
+        job: {
+          id: job.id,
+          statusCheckEndpoint: `/api/v1/documents/job-status/transfer/${job.id}`
+        }
+      });
+    } catch (error) {
+      console.error('Document transfer error:', error);
+      res.status(500).json({
+        error: error.message,
+        code: 'SERVER_ERROR'
+      });
+    }
+  }
+  
+  async getDocumentOwnership(req, res) {
+    try {
+      const { documentId } = req.params;
+      
+      const document = await Document.findById(documentId);
+      
+      if (!document) {
+        return res.status(404).json({
+          error: 'Document not found',
+          code: 'DOCUMENT_NOT_FOUND'
+        });
+      }
+      
+      if (document.documentType !== 'Transferable') {
+        return res.status(400).json({
+          error: 'Document is not transferable',
+          code: 'NON_TRANSFERABLE_DOCUMENT'
+        });
+      }
+      
+      // Check if user has permission to view
+      const userId = req.user._id;
+      if (document.creator.toString() !== userId.toString() &&
+          !document.endorsementChain.includes(userId)) {
+        return res.status(403).json({
+          error: 'You do not have permission to view this document ownership',
+          code: 'UNAUTHORIZED_ACCESS'
+        });
+      }
+      
+      let ownershipInfo;
+      
+      if (document.blockchainId) {
+        try {
+            ownershipInfo = await BlockchainService.getDocumentOwnership(
+                document.documentHash,
+                document.blockchainId
+            );
+        } catch (blockchainError) {
+            console.error('Error getting ownership from blockchain:', blockchainError);
+            return res.status(500).json({
+                error: 'Failed to retrieve document ownership from blockchain',
+                code: 'BLOCKCHAIN_ERROR'
+            });
+        }
+        } else {
+            ownershipInfo = {
+                beneficiary: document.creator,
+                holder: document.creator
+            };
+        }
+
+        res.json({
+            document: {
+                id: document._id,
+                documentType: document.documentType,
+                documentHash: document.documentHash,
+                status: document.status
+            },
+            ownership: ownershipInfo
+        });
+        } catch (error) {
+            console.error('Get document ownership error:', error);
+            res.status(500).json({
+                error: error.message,
+                code: 'SERVER_ERROR'
+            });
+        }
+    }
+
 }
 
 module.exports = new DocumentController();

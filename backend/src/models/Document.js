@@ -1,3 +1,4 @@
+// backend/src/models/Document.js
 const mongoose = require('mongoose');
 
 const DocumentSchema = new mongoose.Schema({
@@ -19,6 +20,11 @@ const DocumentSchema = new mongoose.Schema({
         enum: ['Transferable', 'Verifiable'],
         required: true
     },
+    documentFormat: {
+        type: String,
+        enum: ['OpenAttestation', 'Legacy', 'Custom'],
+        default: 'OpenAttestation'
+    },
     creator: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
@@ -30,11 +36,12 @@ const DocumentSchema = new mongoose.Schema({
     },
     documentHash: {
         type: String,
-        required: true
+        required: true,
+        index: true
     },
     status: {
         type: String,
-        enum: ['Draft', 'Active', 'Verified', 'Transferred', 'Revoked'],
+        enum: ['Draft', 'Active', 'Verified', 'Transferred', 'Revoked', 'PendingVerification', 'PendingTransfer', 'Error'],
         default: 'Draft'
     },
     endorsementChain: [{
@@ -43,6 +50,35 @@ const DocumentSchema = new mongoose.Schema({
     }],
     expiryDate: {
         type: Date
+    },
+    verificationDetails: {
+        documentIntegrity: {
+            type: Boolean,
+            default: null
+        },
+        issuerIdentity: {
+            type: Boolean,
+            default: null
+        },
+        didVerified: {
+            type: Boolean,
+            default: null
+        },
+        dnsVerified: {
+            type: Boolean,
+            default: null
+        },
+        onBlockchain: {
+            type: Boolean,
+            default: null
+        },
+        revoked: {
+            type: Boolean,
+            default: false
+        },
+        lastVerified: {
+            type: Date
+        }
     },
     verificationTransactionHash: {
         type: String
@@ -75,7 +111,11 @@ const DocumentSchema = new mongoose.Schema({
     },
     revokedAt: {
         type: Date
-    }
+    },
+    lastVerificationAttempt: {
+        type: Date
+    },
+    verificationErrors: [String]
 }, { 
     timestamps: true 
 });
@@ -93,6 +133,29 @@ DocumentSchema.methods.verifyHash = function(metadata) {
     return calculatedHash === this.documentHash;
 };
 
+DocumentSchema.methods.updateVerificationDetails = async function(verificationData) {
+    this.verificationDetails = {
+        ...this.verificationDetails,
+        ...verificationData,
+        lastVerified: new Date()
+    };
+    
+    // Update status based on verification results
+    if (verificationData.revoked) {
+        this.status = 'Revoked';
+    } else if (this.verificationDetails.documentIntegrity && 
+               this.verificationDetails.issuerIdentity && 
+               this.verificationDetails.onBlockchain) {
+        this.status = 'Verified';
+    }
+    
+    await this.save();
+    return this;
+};
 
+// Add index for faster lookups
+DocumentSchema.index({ documentHash: 1 });
+DocumentSchema.index({ creator: 1 });
+DocumentSchema.index({ status: 1 });
 
 module.exports = mongoose.model('Document', DocumentSchema);

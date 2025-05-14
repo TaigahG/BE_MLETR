@@ -92,44 +92,67 @@ documentVerificationQueue.process(async (job) => {
 
 
 documentTransferQueue.process(async (job) => {
-   
-    const { documentId, newHolder, userId } = job.data;
+    const { documentId, newBeneficiary, newHolder, userId } = job.data;
     
     try {
-        
-        const document = await Document.findById(documentId);
-        
-        if (!document) {
-            throw new Error('Document not found');
-        }
-        
-        
-        const transferResult = await BlockchainService.transferDocument(
-            document.blockchainId,
-            newHolder
-        );
-        
+      const document = await Document.findById(documentId);
       
-        const updatedDocument = await Document.findByIdAndUpdate(
-            documentId,
-            {
-                status: 'Transferred',
-                transferTransactionHash: transferResult.transactionHash,
-                transferBlockNumber: Number(transferResult.blockNumber),
-                $push: { endorsementChain: newHolder } 
-            },
-            { new: true }
-        );
-        
-        return {
-            transferResult,
-            document: updatedDocument
-        };
+      if (!document) {
+        throw new Error('Document not found');
+      }
+      
+      if (document.documentType !== 'Transferable') {
+        throw new Error('Document is not transferable');
+      }
+      
+      const transferResult = await BlockchainService.transferDocumentOwnership(
+        document.documentHash,
+        newBeneficiary,
+        newHolder
+      );
+      
+      document.status = 'Transferred';
+      document.transferTransactionHash = transferResult.transactionHash;
+      document.transferBlockNumber = Number(transferResult.blockNumber);
+      
+      // Add the new holder to the endorsement chain if they're not already there
+      // In a real implementation, you'd store the wallet address and map it to user IDs
+      // For now, we're just adding the current user
+      if (!document.endorsementChain.includes(userId)) {
+        document.endorsementChain.push(userId);
+      }
+      
+      await document.save();
+      
+      // Create document history record
+      await documentHistoryService.recordDocumentTransfer(
+        document._id,
+        userId,
+        userId, // In a real implementation, this would be the new holder's user ID
+        transferResult.transactionHash
+      );
+      
+      return {
+        transferResult,
+        document
+      };
     } catch (error) {
-        console.error('Document transfer queue error:', error);
-        throw error;
+      console.error('Document transfer queue error:', error);
+      
+      if (documentId) {
+        try {
+          await Document.findByIdAndUpdate(documentId, {
+            status: 'Error',
+            transferError: error.message
+          });
+        } catch (updateError) {
+          console.error('Error updating document status:', updateError);
+        }
+      }
+      
+      throw error;
     }
-});
+  });
 
 const queueService = {
     addDocumentCreation: async (documentData, documentId) => {
